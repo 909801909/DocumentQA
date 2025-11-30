@@ -10,8 +10,14 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite:///./app.db"
 
-    # API Keys (如果需要的话)
+    # API Keys & LLM Configuration
+    # OpenAI 及兼容接口 (如 DeepSeek, Moonshot, Local LLM)
     OPENAI_API_KEY: Optional[str] = None
+    OPENAI_API_BASE: Optional[str] = None  # 新增: 支持自定义 API 地址
+    # OPENAI_MODEL_NAME: str = "glm-4.5-air"  # 新增: 支持自定义模型名称
+    OPENAI_MODEL_NAME: str = "glm-4-flash"  # 新增: 支持自定义模型名称
+
+    # 通义千问
     QWEN_API_KEY: Optional[str] = None
 
     class Config:
