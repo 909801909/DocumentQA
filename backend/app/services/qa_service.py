@@ -1,10 +1,9 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from sqlalchemy.orm import Session
 import re
 import logging
 from langchain.chains import RetrievalQA
 from langchain_community.vectorstores import FAISS
-# 注意：新版推荐使用 langchain_huggingface，但为了兼容暂用 community
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_core.documents import Document as LangchainDocument
@@ -41,32 +40,25 @@ except ImportError as e:
 
 
 class QAService:
-    """
-    智能问答服务类
-    提供单文档问答、知识库问答和多文档对比功能
-    """
-
     def __init__(self, db: Session):
         self.db = db
 
-    def single_document_qa(self, document_id: int, question: str) -> Dict:
-        """
-        单文档问答
-        """
+    def single_document_qa(self, document_id: int, question: str, history: List[Dict] = []) -> Dict:
         document = self.db.query(Document).filter(Document.id == document_id).first()
         if not document:
             return {"error": "文档未找到"}
 
-        # 使用大语言模型进行问答
-        answer = self._llm_qa(document.content, question, document.filename)
+        # 构建包含历史的上下文 Query
+        full_query = self._format_query_with_history(question, history)
 
-        # 保存问答记录
-        question_obj = QuestionCreate(
+        answer = self._llm_qa(document.content, full_query, document.filename)
+
+        # 保存记录 (可选：保存带历史的上下文或仅保存当前问题)
+        self._save_question(QuestionCreate(
             document_id=document_id,
             question=question,
             answer=answer
-        )
-        self._save_question(question_obj)
+        ))
 
         return {
             "document_id": document_id,
@@ -75,27 +67,27 @@ class QAService:
             "answer": answer
         }
 
-    def knowledge_base_qa(self, question: str) -> Dict:
-        """
-        知识库问答（跨文档综合提问）
-        """
+    def knowledge_base_qa(self, question: str, history: List[Dict] = []) -> Dict:
         documents = self.db.query(Document).all()
         if not documents:
             return {"error": "文档库为空"}
 
-        # 合并所有文档内容
-        combined_content = "\n".join([doc.content for doc in documents])
+        # 优化：给每个文档内容加上标题前缀，帮助 LLM 区分来源
+        combined_content_parts = []
+        for doc in documents:
+            combined_content_parts.append(
+                f"--- 文档: {doc.filename} ---\n{doc.content[:2000]}...")  # 截断以防止 Token 溢出，实际生产应使用向量库检索
 
-        # 使用大语言模型进行问答
-        answer = self._llm_qa(combined_content, question, "知识库")
+        combined_content = "\n\n".join(combined_content_parts)
+        full_query = self._format_query_with_history(question, history)
 
-        # 保存问答记录（不关联特定文档）
-        question_obj = QuestionCreate(
+        answer = self._llm_qa(combined_content, full_query, "知识库全部文档")
+
+        self._save_question(QuestionCreate(
             document_id=None,
             question=question,
             answer=answer
-        )
-        self._save_question(question_obj)
+        ))
 
         return {
             "question": question,
@@ -103,24 +95,40 @@ class QAService:
             "document_count": len(documents)
         }
 
-    def multi_document_comparison(self, document_ids: List[int]) -> Dict:
-        """
-        多文档对比
-        """
+    def multi_document_comparison(self, document_ids: List[int], question: str = "") -> Dict:
         if len(document_ids) < 2:
             return {"error": "至少需要两个文档进行对比"}
 
         documents = self.db.query(Document).filter(Document.id.in_(document_ids)).all()
-        if len(documents) != len(document_ids):
-            return {"error": "部分文档未找到"}
 
-        # 简单的文档对比实现
-        comparison_result = self._compare_documents(documents)
+        # 基础统计对比
+        base_comparison = self._compare_documents(documents)
+
+        # 智能 LLM 对比分析
+        docs_text = "\n\n".join([f"文档 [{doc.filename}]:\n{doc.content[:1500]}" for doc in documents])
+        prompt = f"请对比以下几篇文档的内容。{question if question else '分析它们的主要观点、数据差异和共同点。'} 请以 Markdown 格式输出详细的对比报告。\n\n{docs_text}"
+
+        ai_analysis = self._llm_qa(docs_text, prompt, "多文档对比")
 
         return {
             "documents": [{"id": doc.id, "title": doc.filename} for doc in documents],
-            "comparison": comparison_result
+            "comparison": base_comparison,
+            "ai_analysis": ai_analysis
         }
+
+    def _format_query_with_history(self, question: str, history: List[Dict]) -> str:
+        """
+        格式化包含历史记录的问题
+        """
+        if not history:
+            return question
+
+        history_text = ""
+        for msg in history:
+            role = "用户" if msg['role'] == 'user' else "助手"
+            history_text += f"{role}: {msg['content']}\n"
+
+        return f"以下是历史对话：\n{history_text}\n现在用户的问题是：{question}\n请根据上下文回答。"
 
     def _llm_qa(self, content: str, question: str, context: str) -> str:
         """

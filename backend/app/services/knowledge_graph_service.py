@@ -62,44 +62,33 @@ class KnowledgeGraphService:
             "node_count": len(nodes),
             "edge_count": len(edges)
         }
-    
+
     def _extract_entities_and_relations(self, document: Document):
-        """
-        从文档中提取实体和关系
-        
-        Args:
-            document: 文档对象
-        """
-        # 这里是简化的实体和关系提取逻辑
-        # 在实际应用中，可以使用NER（命名实体识别）等技术
-        
-        # 提取可能的实体（名词短语）
-        entities = self._extract_entities(document.content)
-        
-        # 添加实体到图中
-        for entity in entities:
-            if self.graph.has_node(entity):
-                # 如果节点已存在，增加计数
-                self.graph.nodes[entity]['count'] = self.graph.nodes[entity].get('count', 1) + 1
-            else:
-                # 添加新节点
-                self.graph.add_node(entity, count=1)
-        
-        # 提取可能的关系（简化方法：在同一句子中的实体可能存在关系）
+        # 优化：仅处理包含重要信息的句子，过滤过短的句子
         sentences = re.split(r'[.!?。！？]', document.content)
-        for sentence in sentences:
-            sentence_entities = [e for e in entities if e in sentence]
-            # 在同一句子中的实体之间添加边
-            for i in range(len(sentence_entities)):
-                for j in range(i+1, len(sentence_entities)):
-                    entity1 = sentence_entities[i]
-                    entity2 = sentence_entities[j]
-                    if self.graph.has_edge(entity1, entity2):
-                        # 如果边已存在，增加权重
-                        self.graph[entity1][entity2]['weight'] = self.graph[entity1][entity2].get('weight', 1) + 1
+        valid_sentences = [s for s in sentences if len(s.strip()) > 5]
+
+        for sentence in valid_sentences:
+            # 提取实体
+            entities_in_sentence = self._extract_entities(sentence)
+
+            # 添加节点
+            for entity in entities_in_sentence:
+                if self.graph.has_node(entity):
+                    self.graph.nodes[entity]['count'] = self.graph.nodes[entity].get('count', 1) + 1
+                else:
+                    self.graph.add_node(entity, count=1)
+
+            # 建立关系 (共现关系)
+            # 优化：限制距离，只有在一定词距内的实体才建立连线，避免无关实体相连
+            if len(entities_in_sentence) > 1:
+                import itertools
+                # 对任意两个实体建立边
+                for e1, e2 in itertools.combinations(entities_in_sentence, 2):
+                    if self.graph.has_edge(e1, e2):
+                        self.graph[e1][e2]['weight'] += 1
                     else:
-                        # 添加新边
-                        self.graph.add_edge(entity1, entity2, weight=1)
+                        self.graph.add_edge(e1, e2, weight=1, relation="相关")  # 默认为相关
     
     def _extract_entities(self, text: str) -> List[str]:
         """
