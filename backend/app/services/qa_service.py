@@ -43,6 +43,35 @@ class QAService:
     def __init__(self, db: Session):
         self.db = db
 
+    def generate_summary_for_documents(self, document_ids: List[int]) -> str:
+        """
+        为指定的多个文档生成一个综合性的摘要。
+        """
+        if not document_ids:
+            return "没有选择任何文档以生成摘要。"
+
+        documents = self.db.query(Document).filter(Document.id.in_(document_ids)).all()
+        if not documents:
+            return "所选文档未找到。"
+
+        # 合并所有文档内容，并为每个文档内容添加标题以作区分
+        combined_content = "\n\n".join(
+            [f"--- 文档: {doc.filename} ---\n{doc.content}" for doc in documents]
+        )
+
+        # 创建一个专门用于生成摘要的prompt
+        summary_prompt = (
+            "请根据以下提供的全部内容，生成一段综合性的、流畅的摘要。"
+            "摘要应涵盖所有文档的核心要点，并以一个段落的形式呈现。"
+            "请直接输出摘要内容，不要包含任何额外的引导性文字，如“这是摘要：”。"
+        )
+
+        # 使用现有的LLM问答逻辑来生成摘要
+        # 我们将合并后的内容作为“上下文”，将摘要prompt作为“问题”
+        summary = self._llm_qa(combined_content, summary_prompt, "文档摘要生成")
+        
+        return summary
+
     def single_document_qa(self, document_id: int, question: str, history: List[Dict] = []) -> Dict:
         document = self.db.query(Document).filter(Document.id == document_id).first()
         if not document:
