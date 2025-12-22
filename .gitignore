@@ -1,0 +1,45 @@
+# 忽略 JetBrains IDE 的配置文件
+.idea/
+
+# 忽略 VSCode 的配置文件
+.vscode/
+
+# 忽略 macOS 的系统文件
+.DS_Store
+
+# 忽略 Python 缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 忽略 Python 虚拟环境
+venv/
+env/
+.venv/
+.env/
+
+# 忽略数据库文件
+*.sqlite3
+*.db
+app.db
+
+# 忽略日志文件
+*.log
+
+# 忽略前端依赖文件夹
+frontend/node_modules/
+
+# 忽略前端构建产物
+frontend/dist/
+frontend/build/
+
+# 忽略 npm 调试日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 忽略敏感信息文件
+.env
+.env.local
+.env.*.local
