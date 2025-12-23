@@ -13,9 +13,16 @@ class Settings(BaseSettings):
     # API Keys & LLM Configuration
     # OpenAI 及兼容接口 (如 DeepSeek, Moonshot, Local LLM)
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_API_BASE: Optional[str] = None  # 新增: 支持自定义 API 地址
-    # OPENAI_MODEL_NAME: str = "glm-4.5-air"  # 新增: 支持自定义模型名称
-    OPENAI_MODEL_NAME: str = "glm-4-flash"  # 新增: 支持自定义模型名称
+    OPENAI_API_BASE: Optional[str] = None
+    OPENAI_MODEL_NAME: str = "glm-4-flash"  # 默认单模型
+
+    # --- 多模型竞技场配置 ---
+    # 这里定义4个要对比的模型名称
+    ARENA_MODEL_1: str = "glm-4-flash"
+    ARENA_MODEL_2: str = "glm-4-air"
+    ARENA_MODEL_3: str = "glm-4"
+    ARENA_MODEL_4: str = "glm-3-turbo" 
+    # -----------------------
 
     # 通义千问
     QWEN_API_KEY: Optional[str] = None

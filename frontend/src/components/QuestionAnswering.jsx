@@ -1,28 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Layout, Card, Input, Button, Select, List, Avatar, Spin, message, Typography, Space, Tag, Tooltip } from 'antd';
-import { SendOutlined, UserOutlined, RobotOutlined, ClearOutlined, FileTextOutlined, DatabaseOutlined, DiffOutlined } from '@ant-design/icons';
-import ReactMarkdown from 'react-markdown'; // 需要确保安装了 react-markdown，如果没有可以使用普通文本显示
-import { singleDocumentQA, knowledgeBaseQA, multiDocumentComparison } from '../api/qaApi';
+import { Layout, Card, Input, Button, Select, List, Avatar, Spin, message, Typography, Space, Tag, Tooltip, Row, Col } from 'antd';
+import { SendOutlined, UserOutlined, RobotOutlined, ClearOutlined, FileTextOutlined, DatabaseOutlined, DiffOutlined, AppstoreOutlined } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
+import { singleDocumentQA, knowledgeBaseQA, multiDocumentComparison, multiModelQA } from '../api/qaApi';
 import { getDocuments } from '../api/documentApi';
 
 const { Sider, Content } = Layout;
 const { Option } = Select;
 const { TextArea } = Input;
-const { Text } = Typography;
+const { Text, Title } = Typography;
 
 const QuestionAnswering = () => {
-  // 状态管理
   const [documents, setDocuments] = useState([]);
-  const [mode, setMode] = useState('single'); // single, kb, compare
+  const [mode, setMode] = useState('single'); // single, kb, compare, arena
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [selectedCompareIds, setSelectedCompareIds] = useState([]);
 
-  // 聊天记录 [{ role: 'user' | 'assistant', content: '...', type: 'text' | 'analysis' }]
   const [chatHistory, setChatHistory] = useState([
     { role: 'assistant', content: '你好！我是智能文档助手。请在左侧选择模式和文档，然后开始提问。' }
   ]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // 竞技场模式的专用状态
+  const [arenaResults, setArenaResults] = useState(null);
 
   const chatListRef = useRef(null);
 
@@ -31,11 +32,10 @@ const QuestionAnswering = () => {
   }, []);
 
   useEffect(() => {
-    // 自动滚动到底部
     if (chatListRef.current) {
       chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
     }
-  }, [chatHistory]);
+  }, [chatHistory, arenaResults]);
 
   const loadDocuments = async () => {
     try {
@@ -46,12 +46,10 @@ const QuestionAnswering = () => {
     }
   };
 
-  // 发送消息处理
   const handleSend = async () => {
     if (!inputValue.trim()) return;
 
-    // 校验选择
-    if (mode === 'single' && !selectedDocId) {
+    if ((mode === 'single' || mode === 'arena') && !selectedDocId) {
       message.warning('请先选择一个文档');
       return;
     }
@@ -62,18 +60,31 @@ const QuestionAnswering = () => {
 
     const question = inputValue;
     setInputValue('');
+    setLoading(true);
 
-    // 添加用户消息
+    // 竞技场模式特殊处理
+    if (mode === 'arena') {
+      setArenaResults(null); // 清空上次结果
+      try {
+        const result = await multiModelQA(selectedDocId, question);
+        setArenaResults(result.answers);
+      } catch (error) {
+        message.error(`竞技场模式出错: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // 普通模式处理
     const newHistory = [...chatHistory, { role: 'user', content: question }];
     setChatHistory(newHistory);
-    setLoading(true);
 
     try {
       let result;
-      // 提取纯文本历史用于发送给后端 (简化版，只发最近几轮)
       const contextHistory = newHistory
         .filter(msg => msg.role !== 'system')
-        .slice(-6) // 保留最近6条
+        .slice(-6)
         .map(msg => ({ role: msg.role, content: msg.content }));
 
       if (mode === 'single') {
@@ -81,14 +92,11 @@ const QuestionAnswering = () => {
       } else if (mode === 'kb') {
         result = await knowledgeBaseQA(question, contextHistory);
       } else if (mode === 'compare') {
-        // 对比模式通常是直接生成报告，但也可以作为对话的一部分
-        result = await multiDocumentComparison(selectedCompareIds, question); // 传递问题以便定向对比
+        result = await multiDocumentComparison(selectedCompareIds, question);
       }
 
-      // 处理返回结果
       let answerContent = '';
       if (mode === 'compare') {
-        // 格式化对比结果
         answerContent = `**文档对比分析：**\n\n${result.ai_analysis}\n\n**统计数据：**\n* 文档总数: ${result.documents.length}\n* 总字数: ${result.comparison.length_comparison.total_length}`;
       } else {
         answerContent = result.answer;
@@ -104,9 +112,9 @@ const QuestionAnswering = () => {
 
   const clearChat = () => {
     setChatHistory([{ role: 'assistant', content: '对话已清空。我们可以重新开始了。' }]);
+    setArenaResults(null);
   };
 
-  // 渲染消息气泡
   const renderMessage = (item) => {
     const isUser = item.role === 'user';
     return (
@@ -125,13 +133,53 @@ const QuestionAnswering = () => {
           padding: '12px 16px',
           boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
         }}>
-          {/* 使用 ReactMarkdown 渲染 Markdown，如果未安装则直接显示文本 */}
           <div style={{ wordWrap: 'break-word', lineHeight: '1.6' }}>
-             {/* 这里为了演示简单直接显示，实际建议用 ReactMarkdown */}
-             <span dangerouslySetInnerHTML={{ __html: item.content.replace(/\n/g, '<br/>') }} />
+             <ReactMarkdown>{item.content}</ReactMarkdown>
           </div>
         </div>
         {isUser && <Avatar icon={<UserOutlined />} style={{ backgroundColor: '#87d068', marginLeft: 10 }} />}
+      </div>
+    );
+  };
+
+  // 渲染竞技场四宫格
+  const renderArena = () => {
+    if (!arenaResults && !loading) {
+      return (
+        <div style={{ textAlign: 'center', marginTop: 100, color: '#999' }}>
+          <AppstoreOutlined style={{ fontSize: 48, marginBottom: 20 }} />
+          <p>请在下方输入问题，4个大模型将同时为您解答</p>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ padding: 20, height: '100%', overflowY: 'auto' }}>
+        {loading && (
+          <div style={{ textAlign: 'center', marginBottom: 20 }}>
+            <Spin tip="4位选手正在激烈思考中..." size="large" />
+          </div>
+        )}
+        
+        {arenaResults && (
+          <Row gutter={[16, 16]}>
+            {Object.entries(arenaResults).map(([modelName, answer], index) => (
+              <Col span={12} key={modelName}>
+                <Card 
+                  title={<><RobotOutlined /> {modelName}</>} 
+                  bordered={true}
+                  headStyle={{ backgroundColor: '#fafafa' }}
+                  style={{ height: '100%', minHeight: 300 }}
+                  extra={<Tag color="blue">选手 {index + 1}</Tag>}
+                >
+                  <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+                    <ReactMarkdown>{answer}</ReactMarkdown>
+                  </div>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        )}
       </div>
     );
   };
@@ -150,10 +198,11 @@ const QuestionAnswering = () => {
               <Option value="single"><FileTextOutlined /> 单文档问答</Option>
               <Option value="kb"><DatabaseOutlined /> 知识库问答</Option>
               <Option value="compare"><DiffOutlined /> 多文档对比</Option>
+              <Option value="arena"><AppstoreOutlined /> 多模型竞技场</Option>
             </Select>
           </div>
 
-          {mode === 'single' && (
+          {(mode === 'single' || mode === 'arena') && (
             <div>
               <Text strong>选择文档</Text>
               <Select
@@ -198,29 +247,35 @@ const QuestionAnswering = () => {
               <li>单文档：针对特定文件深入提问。</li>
               <li>知识库：综合所有文档内容回答。</li>
               <li>对比：智能分析多个文档的异同。</li>
+              <li>竞技场：4个模型同台竞技，优劣立判。</li>
             </ul>
           </div>
         </Space>
       </Sider>
 
       <Content style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        {/* 聊天记录区域 */}
+        {/* 内容区域：根据模式切换显示 */}
         <div
           ref={chatListRef}
           style={{
             flex: 1,
             overflowY: 'auto',
-            padding: '20px',
-            scrollBehavior: 'smooth'
+            padding: '0',
+            scrollBehavior: 'smooth',
+            backgroundColor: mode === 'arena' ? '#f0f2f5' : '#fff'
           }}
         >
-          {chatHistory.map((item, index) => (
-            <div key={index}>{renderMessage(item)}</div>
-          ))}
-          {loading && (
-            <div style={{ display: 'flex', justifyContent: 'flex-start', padding: '0 10px', marginBottom: 20 }}>
-               <Avatar icon={<RobotOutlined />} style={{ backgroundColor: '#1890ff', marginRight: 10 }} />
-               <Spin tip="思考中..." />
+          {mode === 'arena' ? renderArena() : (
+            <div style={{ padding: '20px' }}>
+              {chatHistory.map((item, index) => (
+                <div key={index}>{renderMessage(item)}</div>
+              ))}
+              {loading && (
+                <div style={{ display: 'flex', justifyContent: 'flex-start', padding: '0 10px', marginBottom: 20 }}>
+                   <Avatar icon={<RobotOutlined />} style={{ backgroundColor: '#1890ff', marginRight: 10 }} />
+                   <Spin tip="思考中..." />
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -45,3 +45,16 @@ async def multi_document_comparison(
     qa_service = QAService(db)
     result = qa_service.multi_document_comparison(document_ids, question)
     return result
+
+@router.post("/multi-model")
+async def multi_model_qa(
+        document_id: int,
+        question: str,
+        db: Session = Depends(get_db)
+):
+    """
+    多模型竞技场：使用4个模型同时回答问题
+    """
+    qa_service = QAService(db)
+    result = qa_service.multi_model_qa(document_id, question)
+    return result

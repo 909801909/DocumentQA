@@ -25,3 +25,10 @@ export const multiDocumentComparison = (documentIds, question = "") => {
     question: question
   });
 };
+
+// 多模型竞技场问答
+export const multiModelQA = (documentId, question) => {
+  return apiClient.post('/qa/multi-model', null, {
+    params: { document_id: documentId, question }
+  });
+};
