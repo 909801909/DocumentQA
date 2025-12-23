@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, message, Spin, Select, Space, Typography } from 'antd';
+import { Card, Form, Input, Button, Radio, message, Space, Select, Spin, Typography } from 'antd';
 import ReactECharts from 'echarts-for-react';
 import { buildKnowledgeGraph } from '../api/knowledgeGraphApi';
 import { getDocuments } from '../api/documentApi';
@@ -41,8 +41,7 @@ const KnowledgeGraph = () => {
         setGraphData(null);
       }
     } catch (error) {
-      message.error('生成知识图谱失败: ' + error.message);
-      setGraphData(null);
+      message.error('生成知识图谱失败: ' + (error.response?.data?.detail || error.message));
     } finally {
       setLoading(false);
     }
@@ -54,12 +53,12 @@ const KnowledgeGraph = () => {
     const nodes = graphData.nodes.map(node => ({
       id: node.id,
       name: node.label,
-      symbolSize: Math.max(node.size, 15), // 调整节点大小逻辑
+      symbolSize: Math.max(node.size, 15),
       itemStyle: {
         color: '#5470C6'
       },
       label: {
-        show: node.size > 20, // 只有较大的节点才常驻显示标签
+        show: node.size > 20,
         position: 'right',
         formatter: '{b}'
       },
@@ -69,7 +68,7 @@ const KnowledgeGraph = () => {
       source: edge.source,
       target: edge.target,
       label: {
-        show: true, // 直接在边上显示关系
+        show: true,
         formatter: edge.label,
         fontSize: 10,
         color: '#333'
@@ -82,7 +81,7 @@ const KnowledgeGraph = () => {
 
     return {
       title: {
-        text: '文档关系图谱',
+        text: '文档关系图谱 (AI 生成)',
         subtext: documents.find(d => d.id === selectedDocId)?.filename || '',
         left: 'center'
       },
@@ -106,12 +105,12 @@ const KnowledgeGraph = () => {
           data: nodes,
           links: links,
           force: {
-            repulsion: 600, // 进一步增加斥力
+            repulsion: 600,
             edgeLength: 200,
             friction: 0.6,
             gravity: 0.1
           },
-          edgeSymbol: ['none', 'arrow'], // 使用箭头表示有向关系
+          edgeSymbol: ['none', 'arrow'],
           edgeSymbolSize: [4, 10],
           edgeLabel: {
             show: true,
@@ -159,15 +158,18 @@ const KnowledgeGraph = () => {
             ))}
           </Select>
           <Button onClick={handleGenerateGraph} loading={loading} type="primary">
-            生成图谱
+            {loading ? '生成中...' : '生成图谱'}
           </Button>
         </Space>
       }
       style={{ height: '100%' }}
     >
       {loading ? (
+        // 修正 Spin 用法，将它作为容器
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-          <Spin tip="正在深入分析文档，构建关系中..." size="large" />
+          <Spin size="large">
+            <div style={{ marginTop: '80px', color: '#999' }}>正在深入分析文档，构建关系中...</div>
+          </Spin>
         </div>
       ) : graphData ? (
         <ReactECharts option={getOption()} style={{ height: 'calc(100vh - 250px)' }} notMerge={true} lazyUpdate={true} />

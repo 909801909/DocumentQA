@@ -3,7 +3,7 @@ import axios from 'axios';
 // 创建axios实例
 const apiClient = axios.create({
   baseURL: '/api', // 使用Vite代理
-  timeout: 120000, // 将超时时间增加到 120 秒
+  timeout: 300000, // 极限增加超时时间到 300 秒 (5 分钟)
   headers: {
     'Content-Type': 'application/json',
   },

@@ -1,16 +1,42 @@
 import networkx as nx
 from sqlalchemy.orm import Session
 import re
-from typing import List, Dict, Optional
-import jieba.posseg as pseg
-from collections import defaultdict
+from typing import List, Dict, Optional, Any
+import json
+import logging
 import matplotlib.pyplot as plt
 from io import BytesIO
 import base64
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from matplotlib import font_manager
 
+# LangChain imports
+from langchain.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import Runnable
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 from app.models.document import Document
+from app.core.config import settings
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 条件导入不同平台的模块
+try:
+    from langchain_openai import ChatOpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+try:
+    from langchain_community.llms import Tongyi
+    QWEN_AVAILABLE = True
+except ImportError:
+    QWEN_AVAILABLE = False
 
 # 改进的字体查找和注册逻辑
 def get_chinese_font():
@@ -21,12 +47,9 @@ def get_chinese_font():
         try:
             font_prop = font_manager.FontProperties(fname=font_path)
             if any(name in font_prop.get_name() for name in font_names):
-                print(f"Found suitable font: {font_prop.get_name()} at {font_path}")
                 return font_prop
         except Exception:
             continue
-            
-    print("Warning: No suitable system Chinese font found for Matplotlib. Image generation may have garbled text.")
     return None
 
 CHINESE_FONT_PROP = get_chinese_font()
@@ -35,70 +58,164 @@ class KnowledgeGraphService:
     def __init__(self, db: Session):
         self.db = db
         self.graph = nx.DiGraph()
-        self.stop_words = self._load_stop_words()
-
-    def _load_stop_words(self):
-        return {'的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这'}
 
     def build_knowledge_graph(self, document_id: Optional[int] = None) -> Dict:
         self.graph.clear()
+        
+        documents = []
         if document_id:
-            document = self.db.query(Document).filter(Document.id == document_id).first()
-            if not document:
-                return {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0}
-            self._extract_entities_and_relations(document)
+            doc = self.db.query(Document).filter(Document.id == document_id).first()
+            if doc:
+                documents.append(doc)
         else:
             documents = self.db.query(Document).all()
-            for doc in documents:
-                self._extract_entities_and_relations(doc)
+            
+        if not documents:
+            return {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0}
+
+        # 使用 LLM 提取图谱数据
+        for doc in documents:
+            self._extract_graph_from_llm(doc)
 
         if not self.graph.nodes:
             return {"nodes": [], "edges": [], "node_count": 0, "edge_count": 0}
 
+        # 移除孤立节点
         node_counts = nx.get_node_attributes(self.graph, 'count')
         isolates = list(nx.isolates(self.graph))
         for node in isolates:
             if node_counts.get(node, 1) < 2:
                 self.graph.remove_node(node)
 
+        # 计算中心性并生成返回数据
         centrality = nx.degree_centrality(self.graph)
-        nodes = [{"id": node, "label": node, "size": (centrality.get(node, 0) * 50) + (data.get("count", 1) * 2)} for node, data in self.graph.nodes(data=True)]
-        edges = [{"source": source, "target": target, "label": data.get('relation', '相关')} for source, target, data in self.graph.edges(data=True)]
+        nodes = []
+        for node, data in self.graph.nodes(data=True):
+            nodes.append({
+                "id": node,
+                "label": node,
+                "size": (centrality.get(node, 0) * 50) + (data.get("count", 1) * 2)
+            })
+            
+        edges = []
+        for source, target, data in self.graph.edges(data=True):
+            edges.append({
+                "source": source,
+                "target": target,
+                "label": data.get('relation', '相关')
+            })
 
         return {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges)}
 
-    def _extract_entities_and_relations(self, document: Document):
-        content = re.sub(r'\s+', ' ', document.content)
-        sentences = re.split(r'[.!?。！？\n]', content)
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if len(sentence) < 5: continue
-            words = list(pseg.cut(sentence))
-            entities = self._extract_entities(words)
-            for entity in entities:
-                if self.graph.has_node(entity): self.graph.nodes[entity]['count'] += 1
-                else: self.graph.add_node(entity, count=1)
-            self._extract_verb_relations(words)
+    def _extract_graph_from_llm(self, document: Document):
+        text = document.content
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+        chunks = text_splitter.split_text(text)
+        
+        max_chunks = 6
+        chunks = chunks[:max_chunks]
 
-    def _extract_entities(self, words) -> List[str]:
-        allowed_pos = {'n', 'nr', 'ns', 'nt', 'nz', 'eng'}
-        return list(dict.fromkeys([word for word, flag in words if flag in allowed_pos and len(word) > 1 and word not in self.stop_words]))
+        # --- 优化后的并行处理 ---
+        # 降级并发数到 2，以保证稳定性
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = []
+            for chunk in chunks:
+                # 提交任务
+                future = executor.submit(self._llm_call, chunk)
+                futures.append(future)
+                # 关键修改：错峰提交，避免瞬间拥堵
+                time.sleep(0.5)
+            
+            # 获取结果
+            for future in as_completed(futures):
+                try:
+                    result_json = future.result()
+                    self._parse_and_add_to_graph(result_json)
+                except Exception as e:
+                    logger.error(f"Error extracting graph from chunk: {e}")
+                    continue
 
-    def _extract_verb_relations(self, words):
-        for i in range(len(words) - 2):
-            w1, f1 = words[i]; w2, f2 = words[i+1]; w3, f3 = words[i+2]
-            if self._is_entity(w1, f1) and self._is_verb(w2, f2) and self._is_entity(w3, f3): self._add_relation(w1, w3, w2)
-            if self._is_entity(w1, f1) and w2 == '的' and self._is_entity(w3, f3): self._add_relation(w1, w3, '拥有')
+    def _llm_call(self, text: str) -> Dict:
+        prompt_template = """
+        你是一位友好的数据分析师。请帮我从下面的文本中识别出关键的实体和它们之间的关系，并以JSON格式返回。
 
-    def _is_entity(self, word, flag):
-        return flag in {'n', 'nr', 'ns', 'nt', 'nz', 'eng'} and len(word) > 1 and word not in self.stop_words
+        JSON的结构应该包含两个键：
+        - "entities": 一个包含所有实体名称的字符串列表。
+        - "relations": 一个对象列表，每个对象包含 "source", "target", 和 "relation" 三个键。
 
-    def _is_verb(self, word, flag):
-        return flag.startswith('v') and len(word) > 0
+        请确保你的回答只包含纯粹的JSON内容，不要有任何额外的解释或Markdown标记。
 
-    def _add_relation(self, e1, e2, verb):
-        if self.graph.has_edge(e1, e2): self.graph[e1][e2]['weight'] += 1
-        else: self.graph.add_edge(e1, e2, relation=verb, weight=1)
+        这是文本：
+        {text}
+        """
+        
+        prompt = PromptTemplate(template=prompt_template, input_variables=["text"])
+        
+        llm: Optional[Runnable] = None
+        if OPENAI_AVAILABLE and settings.OPENAI_API_KEY:
+            llm_kwargs = {
+                "openai_api_key": settings.OPENAI_API_KEY,
+                "model_name": settings.OPENAI_MODEL_NAME,
+                "temperature": 0,
+                "request_timeout": 60
+            }
+            if settings.OPENAI_API_BASE:
+                llm_kwargs["openai_api_base"] = settings.OPENAI_API_BASE
+            llm = ChatOpenAI(**llm_kwargs)
+            
+        elif QWEN_AVAILABLE and settings.QWEN_API_KEY:
+            llm = Tongyi(
+                model_name="qwen-turbo",
+                dashscope_api_key=settings.QWEN_API_KEY,
+                temperature=0,
+                request_timeout=60
+            )
+            
+        if not llm:
+            logger.warning("No LLM available for knowledge graph extraction.")
+            return {"entities": [], "relations": []}
+
+        chain = prompt | llm | StrOutputParser()
+        result_str = chain.invoke({"text": text})
+        
+        json_str = result_str.strip()
+        if json_str.startswith("```json"):
+            json_str = json_str[7:]
+        if json_str.startswith("```"):
+            json_str = json_str[3:]
+        if json_str.endswith("```"):
+            json_str = json_str[:-3]
+            
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            logger.error(f"Failed to decode JSON from LLM response: {json_str}")
+            return {"entities": [], "relations": []}
+
+    def _parse_and_add_to_graph(self, data: Dict):
+        entities = data.get("entities", [])
+        relations = data.get("relations", [])
+        
+        for entity in entities:
+            if not isinstance(entity, str): continue
+            if self.graph.has_node(entity):
+                self.graph.nodes[entity]['count'] += 1
+            else:
+                self.graph.add_node(entity, count=1)
+                
+        for rel in relations:
+            source = rel.get("source")
+            target = rel.get("target")
+            relation = rel.get("relation")
+            
+            if source and target and relation:
+                if not self.graph.has_node(source): self.graph.add_node(source, count=1)
+                if not self.graph.has_node(target): self.graph.add_node(target, count=1)
+                    
+                if self.graph.has_edge(source, target):
+                    self.graph[source][target]['weight'] += 1
+                else:
+                    self.graph.add_edge(source, target, relation=relation, weight=1)
 
     def generate_graph_image_base64(self) -> Optional[str]:
         if not self.graph.nodes:
@@ -110,7 +227,6 @@ class KnowledgeGraphService:
         centrality = nx.degree_centrality(self.graph)
         node_sizes = [(centrality.get(node, 0) * 2000) + 500 for node in self.graph.nodes()]
 
-        # 修正：为 networkx 函数准备 font_family 参数
         font_family = CHINESE_FONT_PROP.get_name() if CHINESE_FONT_PROP else 'sans-serif'
         
         nx.draw_networkx_nodes(self.graph, pos, node_size=node_sizes, node_color='#5470C6', alpha=0.8)
@@ -120,9 +236,8 @@ class KnowledgeGraphService:
         edge_labels = nx.get_edge_attributes(self.graph, 'relation')
         nx.draw_networkx_edge_labels(self.graph, pos, edge_labels=edge_labels, font_size=8, font_family=font_family)
         
-        # 为 plt.title 准备 fontproperties 参数
         title_font_kwargs = {'fontproperties': CHINESE_FONT_PROP} if CHINESE_FONT_PROP else {}
-        plt.title("文档知识图谱", fontsize=20, **title_font_kwargs)
+        plt.title("文档知识图谱 (AI生成)", fontsize=20, **title_font_kwargs)
         plt.axis('off')
         
         buffer = BytesIO()

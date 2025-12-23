@@ -1,3 +1,9 @@
+import os
+# --- 关键修改：设置 Hugging Face 国内镜像 ---
+# 这行代码必须在导入 langchain 或 transformers 之前执行
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+# ------------------------------------------
+
 from typing import List, Dict, Optional, Any
 from sqlalchemy.orm import Session
 import re
@@ -209,7 +215,8 @@ class QAService:
         texts = text_splitter.split_documents(documents)
 
         # 创建嵌入和向量存储
-        embeddings = HuggingFaceEmbeddings()
+        # 显式指定 model_name 以消除警告
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
         db = FAISS.from_documents(texts, embeddings)
 
         # 准备模型参数
@@ -251,7 +258,8 @@ class QAService:
         texts = text_splitter.split_documents(documents)
 
         # 创建嵌入和向量存储
-        embeddings = HuggingFaceEmbeddings()
+        # 显式指定 model_name 以消除警告
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
         db = FAISS.from_documents(texts, embeddings)
 
         # 创建通义千问模型
