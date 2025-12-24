@@ -5,7 +5,8 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import JSONResponse
 
-from app.api import documents, questions, usage_stats, qa, knowledge_graph, reports
+# 移除 usage_stats 的导入
+from app.api import documents, questions, qa, knowledge_graph, reports
 from app.core.database import engine, Base
 from app.core.config import settings
 
@@ -34,7 +35,7 @@ app.add_middleware(
 # 包含路由
 app.include_router(documents.router)
 app.include_router(questions.router)
-app.include_router(usage_stats.router)
+# 移除 usage_stats.router
 app.include_router(qa.router)
 app.include_router(knowledge_graph.router)
 app.include_router(reports.router)

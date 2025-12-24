@@ -5,7 +5,6 @@ import {
   FileSearchOutlined,
   ClusterOutlined,
   FilePdfOutlined,
-  BarChartOutlined
 } from '@ant-design/icons';
 import './App.css';
 
@@ -13,7 +12,6 @@ import DocumentManagement from './components/DocumentManagement';
 import QuestionAnswering from './components/QuestionAnswering';
 import KnowledgeGraph from './components/KnowledgeGraph';
 import ReportGeneration from './components/ReportGeneration';
-import UsageStatistics from './components/UsageStatistics';
 
 const { Header, Content, Footer, Sider } = Layout;
 
@@ -38,8 +36,6 @@ const App = () => {
         return <KnowledgeGraph />;
       case 'report':
         return <ReportGeneration />;
-      case 'stats':
-        return <UsageStatistics />;
       default:
         return <DocumentManagement />;
     }
@@ -74,11 +70,6 @@ const App = () => {
               key: 'report',
               icon: <FilePdfOutlined />,
               label: '报告生成',
-            },
-            {
-              key: 'stats',
-              icon: <BarChartOutlined />,
-              label: '使用统计',
             },
           ]}
         />
